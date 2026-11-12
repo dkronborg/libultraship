@@ -25,8 +25,15 @@ class ConnectedPhysicalDeviceManager {
     void RefreshConnectedSDLGamepads();
 
   private:
+    void AutoAssignSDLGamepadsToPorts(const std::vector<int32_t>& instanceIdsInSDLOrder);
+    void ResetAutoAssignedSDLGamepadPorts();
+
     std::unordered_map<int32_t, SDL_GameController*> mConnectedSDLGamepads;
     std::unordered_map<int32_t, std::string> mConnectedSDLGamepadNames;
     std::unordered_map<uint8_t, std::unordered_set<int32_t>> mIgnoredInstanceIds;
+
+    // CVAR_CONTROLLER_AUTO_ASSIGN_PORTS state: instance id -> port index. Kept in memory only, never saved.
+    std::unordered_map<int32_t, uint8_t> mAutoAssignedPorts;
+    bool mAutoAssignActive = false;
 };
 } // namespace Ship

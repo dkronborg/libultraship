@@ -1,5 +1,7 @@
 #include "ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h"
 #include <spdlog/spdlog.h>
+#include "ship/Context.h"
+#include "ship/config/ConsoleVariable.h"
 
 namespace Ship {
 ConnectedPhysicalDeviceManager::ConnectedPhysicalDeviceManager() {
@@ -53,6 +55,7 @@ void ConnectedPhysicalDeviceManager::RefreshConnectedSDLGamepads() {
     mConnectedSDLGamepads.clear();
     mConnectedSDLGamepadNames.clear();
     static SDL_JoystickGUID sZeroGuid;
+    std::vector<int32_t> instanceIdsInSDLOrder;
 
     for (int32_t i = 0; i < SDL_NumJoysticks(); i++) {
 
@@ -99,10 +102,70 @@ void ConnectedPhysicalDeviceManager::RefreshConnectedSDLGamepads() {
 
         mConnectedSDLGamepads[instanceId] = gamepad;
         mConnectedSDLGamepadNames[instanceId] = gamepadName;
+        instanceIdsInSDLOrder.push_back(instanceId);
 
         for (uint8_t port = 1; port < 4; port++) {
             mIgnoredInstanceIds[port].insert(instanceId);
         }
+    }
+
+    if (Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_CONTROLLER_AUTO_ASSIGN_PORTS, 0)) {
+        AutoAssignSDLGamepadsToPorts(instanceIdsInSDLOrder);
+    } else if (mAutoAssignActive) {
+        ResetAutoAssignedSDLGamepadPorts();
+    }
+}
+
+// Opt-in: give each SDL gamepad exactly one port, in connection (SDL enumeration) order.
+// Ports are sticky: a gamepad keeps its port while it stays connected, and a disconnect frees that port without
+// moving anyone else. Gamepads without a port (newly connected ones, or extras beyond 4) take the lowest free
+// port; if none is free they are ignored on every port until one frees up.
+void ConnectedPhysicalDeviceManager::AutoAssignSDLGamepadsToPorts(const std::vector<int32_t>& instanceIdsInSDLOrder) {
+    mAutoAssignActive = true;
+
+    std::erase_if(mAutoAssignedPorts,
+                  [this](const auto& entry) { return !mConnectedSDLGamepads.contains(entry.first); });
+
+    bool portTaken[4] = {};
+    for (const auto& [instanceId, port] : mAutoAssignedPorts) {
+        portTaken[port] = true;
+    }
+
+    for (auto instanceId : instanceIdsInSDLOrder) {
+        if (mAutoAssignedPorts.contains(instanceId)) {
+            continue;
+        }
+        for (uint8_t port = 0; port < 4; port++) {
+            if (!portTaken[port]) {
+                mAutoAssignedPorts[instanceId] = port;
+                portTaken[port] = true;
+                SPDLOG_INFO("Auto-assigned SDL gamepad \"{}\" (instance id {}) to port {}",
+                            mConnectedSDLGamepadNames[instanceId], instanceId, port + 1);
+                break;
+            }
+        }
+    }
+
+    for (auto instanceId : instanceIdsInSDLOrder) {
+        auto assigned = mAutoAssignedPorts.find(instanceId);
+        for (uint8_t port = 0; port < 4; port++) {
+            if (assigned != mAutoAssignedPorts.end() && assigned->second == port) {
+                UnignoreInstanceIdForPort(port, instanceId);
+            } else {
+                IgnoreInstanceIdForPort(port, instanceId);
+            }
+        }
+    }
+}
+
+// Auto-assign was just turned off: go back to the default of every gamepad on port 1 only.
+// Ports 2-4 were already set to ignore every gamepad by RefreshConnectedSDLGamepads.
+void ConnectedPhysicalDeviceManager::ResetAutoAssignedSDLGamepadPorts() {
+    mAutoAssignActive = false;
+    mAutoAssignedPorts.clear();
+
+    for (const auto& [instanceId, gamepad] : mConnectedSDLGamepads) {
+        UnignoreInstanceIdForPort(0, instanceId);
     }
 }
 } // namespace Ship
